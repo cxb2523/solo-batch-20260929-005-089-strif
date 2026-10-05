@@ -43,6 +43,15 @@ __all__ = (  # noqa: F405
     "Replacement",
     "insert_multiple",
     "replace_multiple",
+    "RuleParseError",
+    "RuleApplicationError",
+    "Rule",
+    "RuleResult",
+    "RuleSet",
+    "RuleSetResult",
+    "FileRuleResult",
+    "DEFAULT_REPLACE_MAX_BYTES",
+    "apply_rules_to_file",
     # string_template.py
     "StringTemplate",
 )

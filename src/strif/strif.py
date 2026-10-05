@@ -54,6 +54,11 @@ __all__ = (
     "rmtree_or_file",
     "chmod_native",
     "lenb",
+    "DEFAULT_REPLACE_MAX_BYTES",
+    "MAX_REPLACE_FILE_BYTES",
+    "FileRuleResult",
+    "replace_in_text",
+    "apply_rules_to_file",
 )
 
 # A pre-opened handle to /dev/null.
@@ -760,3 +765,85 @@ def lenb(s: str, encoding: str = "utf-8") -> int:
     Convenience for length of a string in bytes.
     """
     return len(s.encode(encoding))
+
+
+#
+# ---- Sed-style whole-file replacement (orchestration) ----
+#
+# The pure parsing/application logic lives in `strif.string_replace`; this
+# section only wires it to the filesystem with atomic write-back.
+
+from strif.string_replace import FileRuleResult, RuleSet, RuleSetResult  # noqa: E402
+
+# Whole-file replacement reads the entire file into memory, applies the rules,
+# and writes the result back atomically (all or nothing). This size cap bounds
+# peak memory: we deliberately refuse very large files rather than stream
+# partial results, because a streamed replace cannot be rolled back and would
+# risk leaving a half-rewritten file. Raise the cap per call if you really
+# need to process bigger files and can afford ~2x the file size in RAM.
+DEFAULT_REPLACE_MAX_BYTES = 64 * 1024 * 1024  # 64 MiB
+
+# Alias, for callers that prefer the more explicit name.
+MAX_REPLACE_FILE_BYTES = DEFAULT_REPLACE_MAX_BYTES
+
+
+def replace_in_text(text: str, rules: "str | RuleSet") -> RuleSetResult:
+    """
+    Parse (if needed) and apply sed-style rules to a string, in memory only.
+    See `strif.string_replace` for the rule syntax and policies.
+    """
+    ruleset = rules if isinstance(rules, RuleSet) else RuleSet.from_text(rules)
+    return ruleset.apply(text)
+
+
+def apply_rules_to_file(
+    path: str | Path,
+    rules: "str | RuleSet",
+    max_bytes: int = DEFAULT_REPLACE_MAX_BYTES,
+    make_parents: bool = False,
+    backup_suffix: str | None = None,
+    encoding: str = "utf-8",
+) -> FileRuleResult:
+    """
+    Apply sed-style rules to a whole file and atomically write the result back.
+
+    All or nothing: rules are fully parsed and applied in memory before any
+    write, and the write goes through `atomic_output_file()`, so a parse
+    error, a failed substitution, or a crash mid-write leaves the original
+    file untouched (a stray `*.partial` temp file may remain, never a
+    truncated target). If the rules change nothing, the file is not
+    rewritten at all (`wrote` is False and the mtime is preserved).
+
+    Files larger than `max_bytes` (default 64 MiB, see
+    `DEFAULT_REPLACE_MAX_BYTES`) are refused up front to bound memory use;
+    see the note there for the tradeoff. A missing file is only acceptable
+    with `make_parents=True`, in which case it is created (parent dirs
+    included) with the resulting content.
+    """
+    path = Path(path)
+    ruleset = rules if isinstance(rules, RuleSet) else RuleSet.from_text(rules)
+
+    exists = path.exists()
+    if exists:
+        size = path.stat().st_size
+        if size > max_bytes:
+            raise ValueError(
+                f"File too large for whole-file replace: {quote_if_needed(path)} is "
+                f"{size} bytes (limit {max_bytes}); raise max_bytes explicitly to override"
+            )
+        original = path.read_text(encoding=encoding)
+    else:
+        if not make_parents:
+            raise FileNotFoundError(
+                f"No such file: {quote_if_needed(path)} (pass make_parents=True to create it)"
+            )
+        original = ""
+
+    outcome = ruleset.apply(original)
+    wrote = outcome.final_text != original or not exists
+    if wrote:
+        with atomic_output_file(
+            path, make_parents=make_parents, backup_suffix=backup_suffix
+        ) as tmp:
+            tmp.write_text(outcome.final_text, encoding=encoding)
+    return FileRuleResult(path, wrote, outcome.final_text, outcome.results)
