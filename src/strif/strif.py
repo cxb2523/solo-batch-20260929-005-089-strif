@@ -18,7 +18,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .string_replace import RuleSet
 
 __all__ = (
     "DEV_NULL",
@@ -53,6 +56,7 @@ __all__ = (
     "copytree_atomic",
     "rmtree_or_file",
     "chmod_native",
+    "replace_in_file",
     "lenb",
 )
 
@@ -720,6 +724,45 @@ def copytree_atomic(
         copyfile_atomic(
             source_path, dest_path, make_parents=make_parents, backup_suffix=backup_suffix
         )
+
+
+def replace_in_file(
+    path: str | Path,
+    rules: "str | RuleSet",
+    backup_suffix: str | None = None,
+    encoding: str = "utf-8",
+) -> int:
+    """
+    Apply sed-style substitution rules to a text file, atomically.
+
+    `rules` is either a multi-line string of `s/pattern/replacement/flags`
+    rules or an already-parsed `RuleSet` (see `strif.string_replace`).
+    Rule parsing is fail-fast: the first invalid rule raises `RuleSyntaxError`
+    and the file is left untouched.
+
+    Returns the total number of replacements made. The file is only rewritten
+    if at least one rule actually changed the content.
+
+    Atomicity: the whole file is replaced or not at all. The new content is
+    written via `atomic_write_text()`, so a crash or error can never leave a
+    half-written file at `path`: readers see either the complete new content
+    or the untouched original.
+
+    Memory: the entire file is read into memory and the replaced copy is built
+    alongside it, so peak memory is roughly 2x the file size. This is fine for
+    typical text files (up to tens of MB); for very large files, use a
+    streaming approach instead of this function.
+    """
+    from .string_replace import RuleSet
+
+    ruleset = rules if isinstance(rules, RuleSet) else RuleSet.parse(rules)
+    path = Path(path)
+    original = path.read_text(encoding=encoding)
+    new_text, counts = ruleset.apply_with_counts(original)
+    total = sum(counts)
+    if total > 0 and new_text != original:
+        atomic_write_text(path, new_text, backup_suffix=backup_suffix, encoding=encoding)
+    return total
 
 
 def rmtree_or_file(path: str | Path, ignore_errors: bool = False):

@@ -37,12 +37,16 @@ __all__ = (  # noqa: F405
     "copytree_atomic",
     "rmtree_or_file",
     "chmod_native",
+    "replace_in_file",
     "lenb",
     # string_replace.py
     "Insertion",
     "Replacement",
     "insert_multiple",
     "replace_multiple",
+    "RuleSyntaxError",
+    "Rule",
+    "RuleSet",
     # string_template.py
     "StringTemplate",
 )

@@ -180,3 +180,54 @@ def test_move_file_creates_parents(tmp_path: Path):
     dest = tmp_path / "sub" / "dest.txt"
     move_file(src, dest, keep_backup=False)
     assert dest.read_text() == "content"
+
+
+def test_replace_in_file(tmp_path: Path):
+    from strif import RuleSet, replace_in_file
+
+    target = tmp_path / "data.txt"
+    target.write_text("foo one\nfoo two\nkeep\n")
+
+    # Accepts a raw rules string; returns total replacement count.
+    count = replace_in_file(target, "s/foo/bar/\ns/one/1/\n")
+    assert count == 2
+    assert target.read_text() == "bar 1\nfoo two\nkeep\n"
+
+    # Accepts a pre-parsed RuleSet.
+    count = replace_in_file(target, RuleSet.parse("s/foo/bar/g\n"))
+    assert count == 1
+    assert target.read_text() == "bar 1\nbar two\nkeep\n"
+
+    # No match: file is not rewritten (mtime unchanged).
+    mtime = target.stat().st_mtime_ns
+    assert replace_in_file(target, "s/zzz/qqq/") == 0
+    assert target.stat().st_mtime_ns == mtime
+
+
+def test_replace_in_file_is_all_or_nothing(tmp_path: Path):
+    from strif import RuleSyntaxError, replace_in_file
+
+    target = tmp_path / "data.txt"
+    target.write_text("original\n")
+
+    # A parse failure anywhere aborts before anything is written.
+    with pytest.raises(RuleSyntaxError):
+        replace_in_file(target, "s/original/changed/\nnot-a-rule\n")
+    assert target.read_text() == "original\n"
+    assert not list(tmp_path.glob("*.partial"))
+
+    # An invalid regex also leaves the file untouched.
+    with pytest.raises(RuleSyntaxError):
+        replace_in_file(target, "s/(/x/")
+    assert target.read_text() == "original\n"
+
+
+def test_replace_in_file_with_backup(tmp_path: Path):
+    from strif import replace_in_file
+
+    target = tmp_path / "data.txt"
+    target.write_text("old\n")
+    count = replace_in_file(target, "s/old/new/", backup_suffix=".bak")
+    assert count == 1
+    assert target.read_text() == "new\n"
+    assert (tmp_path / "data.txt.bak").read_text() == "old\n"
